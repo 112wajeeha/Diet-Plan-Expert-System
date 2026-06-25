@@ -87,6 +87,13 @@ THEN Recommend Low-Sodium Foods and Avoid Salty Foods
 * Goal: Lose Weight
 * Condition: Diabetes
 
+## Screenshots
+
+### User Input Interface
+![User Input Interface](screenshots/User_Input_Form.png)
+
+### Generated Diet Plan
+![Generated Diet Plan](screenshots/Meal_Plan_Recommendation.png)
 
 
 ## Future Enhancements
