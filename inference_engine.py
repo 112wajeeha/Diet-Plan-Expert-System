@@ -1,4 +1,3 @@
-
 # ─────────────────────────────────────────────
 #  INFERENCE ENGINE — Diet & Meal Plan Expert System
 #  Uses: Forward Chaining on RULES from knowledge_base.py
@@ -116,9 +115,29 @@ def run_forward_chaining(facts: dict) -> dict:
 #  STEP 4: MEAL PLAN GENERATOR
 # ─────────────────────────────────────────────
 
+# Full 5-slot line-up, kept as-is for backward compatibility.
 MEAL_SLOTS = ["Breakfast", "Morning Snack", "Lunch", "Evening Snack", "Dinner"]
 
-def build_meal_plan(recommended_categories, foods_to_avoid) -> dict:
+# Slot line-ups for each supported meals-per-day setting. Each is a subset
+# of MEAL_SLOTS in the same order, so 3/4/5 meals all read naturally.
+MEAL_SLOTS_BY_COUNT = {
+    3: ["Breakfast", "Lunch", "Dinner"],
+    4: ["Breakfast", "Lunch", "Evening Snack", "Dinner"],
+    5: MEAL_SLOTS,
+}
+
+DEFAULT_NUM_MEALS = 5
+
+
+def get_meal_slots(num_meals: int = DEFAULT_NUM_MEALS) -> list:
+    """Return the ordered list of meal-slot names for a given meals/day count.
+    Falls back to the full 5-slot line-up for any unsupported value."""
+    return MEAL_SLOTS_BY_COUNT.get(num_meals, MEAL_SLOTS)
+
+
+def build_meal_plan(recommended_categories, foods_to_avoid, num_meals: int = DEFAULT_NUM_MEALS) -> dict:
+    slots = get_meal_slots(num_meals)
+
     pool = []
     for cat in recommended_categories:
         if cat in FOOD_DATABASE:
@@ -126,15 +145,24 @@ def build_meal_plan(recommended_categories, foods_to_avoid) -> dict:
                 if item["name"] not in foods_to_avoid:
                     pool.append({**item, "category": cat})
 
-    if len(pool) < len(MEAL_SLOTS):
+    if len(pool) < len(slots):
         for item in FOOD_DATABASE.get("high_protein", []):
             if item["name"] not in foods_to_avoid and item not in pool:
                 pool.append({**item, "category": "high_protein"})
 
+    # Safety net: if every food got filtered out by avoid-lists, fall back
+    # to the full database rather than crashing on an empty pool.
+    if not pool:
+        pool = [
+            {**item, "category": cat}
+            for cat, items in FOOD_DATABASE.items()
+            for item in items
+        ]
+
     random.shuffle(pool)
 
     meal_plan = {}
-    for i, slot in enumerate(MEAL_SLOTS):
+    for i, slot in enumerate(slots):
         meal_plan[slot] = pool[i % len(pool)]
 
     return meal_plan
@@ -152,6 +180,10 @@ def generate_diet_plan(user_input: dict) -> dict:
     goal     = user_input.get("goal", "").lower()
     diseases = [d.lower() for d in user_input.get("diseases", ["none"])]
 
+    # Diet Plan Settings (optional; both fall back to prior behavior).
+    num_meals       = user_input.get("num_meals", DEFAULT_NUM_MEALS)
+    calorie_target  = user_input.get("calorie_target")  # None unless user supplied one
+
     bmi          = calculate_bmi(user_input["weight_kg"], user_input["height_cm"])
     bmi_category = classify_bmi(bmi)
     tdee         = calculate_tdee(
@@ -165,9 +197,17 @@ def generate_diet_plan(user_input: dict) -> dict:
     facts        = {"goal": goal, "diseases": diseases}
     conclusions  = run_forward_chaining(facts)
 
-    target_calories    = tdee + conclusions["calorie_change"]
+    # Existing calculation is untouched; a manually supplied calorie target
+    # (validated by the caller) simply overrides it when present.
+    calculated_target_calories = tdee + conclusions["calorie_change"]
+    if calorie_target is not None:
+        target_calories = calorie_target
+    else:
+        target_calories = calculated_target_calories
+
     meal_plan          = build_meal_plan(conclusions["recommended_categories"],
-                                         conclusions["foods_to_avoid"])
+                                         conclusions["foods_to_avoid"],
+                                         num_meals=num_meals)
     meal_plan_calories = calculate_meal_plan_calories(meal_plan)
 
     return {
@@ -176,7 +216,10 @@ def generate_diet_plan(user_input: dict) -> dict:
         "bmi_category":           bmi_category,
         "tdee":                   tdee,
         "target_calories":        target_calories,
+        "calculated_target_calories": calculated_target_calories,
+        "calorie_target_overridden": calorie_target is not None,
         "calorie_change":         conclusions["calorie_change"],
+        "num_meals":              num_meals,
         "recommended_categories": conclusions["recommended_categories"],
         "avoid_keywords":         conclusions["avoid_keywords"],
         "foods_to_avoid":         conclusions["foods_to_avoid"],
@@ -231,10 +274,8 @@ def get_user_input() -> dict:
     print("═" * 50)
     print("  Please enter your details below:\n")
 
-    # ── Name ──────────────────────────────────────
     name = input("  Your name                 : ").strip()
 
-    # ── Age ───────────────────────────────────────
     while True:
         try:
             age = int(input("  Age (years)               : ").strip())
@@ -244,14 +285,12 @@ def get_user_input() -> dict:
         except ValueError:
             print("  ⚠  Age must be a whole number.")
 
-    # ── Gender ────────────────────────────────────
     while True:
         gender = input("  Gender (male / female)    : ").strip().lower()
         if gender in VALID_GENDERS:
             break
         print(f"  ⚠  Choose from: {VALID_GENDERS}")
 
-    # ── Weight ────────────────────────────────────
     while True:
         try:
             weight = float(input("  Weight (kg)               : ").strip())
@@ -261,7 +300,6 @@ def get_user_input() -> dict:
         except ValueError:
             print("  ⚠  Enter a numeric value e.g. 70 or 65.5")
 
-    # ── Height ────────────────────────────────────
     while True:
         try:
             height = float(input("  Height (cm)               : ").strip())
@@ -271,7 +309,6 @@ def get_user_input() -> dict:
         except ValueError:
             print("  ⚠  Enter a numeric value e.g. 170 or 162.5")
 
-    # ── Activity Level ────────────────────────────
     print()
     print("  Activity levels:")
     print("    sedentary → little/no exercise")
@@ -284,7 +321,6 @@ def get_user_input() -> dict:
             break
         print(f"  ⚠  Choose from: {VALID_ACTIVITY}")
 
-    # ── Goal ──────────────────────────────────────
     print()
     print("  Goals:")
     print("    1. lose weight")
@@ -296,7 +332,6 @@ def get_user_input() -> dict:
             break
         print(f"  ⚠  Type exactly one of: {VALID_GOALS}")
 
-    # ── Diseases ──────────────────────────────────
     print()
     print("  Medical conditions:")
     print("    Options : diabetes | hypertension | none")

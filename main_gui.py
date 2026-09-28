@@ -48,6 +48,25 @@ class DietExpertGUI(ctk.CTk):
         ctk.CTkCheckBox(cb_frame, text="Diabetes", variable=self.diabetes_var).pack(side="left", padx=10)
         ctk.CTkCheckBox(cb_frame, text="Hypertension", variable=self.hypertension_var).pack(side="left", padx=10)
 
+        # --- Diet Plan Settings ---
+        ctk.CTkLabel(self.scroll_frame, text="Diet Plan Settings:", font=("Roboto", 14, "bold")).pack(anchor="w", padx=20, pady=(20, 5))
+
+        # Meals per day (3–5)
+        self.meals_per_day_var = self.add_dropdown("Meals per day:", ["3", "4", "5"])
+
+        # Optional calorie target
+        self.calorie_target_entry = self.add_input(
+            "Calorie Target (optional):",
+            "Leave blank to auto-calculate"
+        )
+
+        # Inline validation feedback for the calorie target, shown instead of
+        # crashing or popping a blocking dialog when the value is invalid.
+        self.calorie_error_label = ctk.CTkLabel(
+            self.scroll_frame, text="", text_color="#E05555", font=("Roboto", 11)
+        )
+        self.calorie_error_label.pack(anchor="w", padx=20, pady=(0, 5))
+
         # Submit Button
         self.submit_btn = ctk.CTkButton(self.scroll_frame, text="GENERATE DIET PLAN", 
                                         command=self.process_input, height=45, font=("Roboto", 14, "bold"))
@@ -70,13 +89,53 @@ class DietExpertGUI(ctk.CTk):
         menu.pack(fill="x", padx=20, pady=5)
         return var
 
+    def validate_calorie_target(self):
+        """Validate the optional calorie target field.
+
+        Returns a tuple (is_valid, value_or_None). When the field is blank
+        this is valid and returns None, preserving the existing calculated
+        calorie behavior. When it's filled but not a positive number, this
+        returns False and leaves an inline error message on the label
+        instead of raising/crashing.
+        """
+        raw = self.calorie_target_entry.get().strip()
+
+        if raw == "":
+            self.calorie_error_label.configure(text="")
+            return True, None
+
+        try:
+            value = float(raw)
+        except ValueError:
+            self.calorie_error_label.configure(
+                text="⚠ Calorie target must be a number (e.g. 1800)."
+            )
+            return False, None
+
+        if value <= 0:
+            self.calorie_error_label.configure(
+                text="⚠ Calorie target must be a positive number."
+            )
+            return False, None
+
+        self.calorie_error_label.configure(text="")
+        return True, value
+
     def process_input(self):
+        # Validate the optional calorie target first so a bad value shows
+        # clear inline feedback and never crashes the app or the flow below.
+        calorie_valid, calorie_target = self.validate_calorie_target()
+        if not calorie_valid:
+            return
+
         try:
             # Collect health conditions
             diseases = []
             if self.diabetes_var.get(): diseases.append("diabetes")
             if self.hypertension_var.get(): diseases.append("hypertension")
             if not diseases: diseases = ["none"]
+
+            num_meals = int(self.meals_per_day_var.get())
 
             # Prepare data for the Inference Engine
             user_data = {
@@ -87,7 +146,9 @@ class DietExpertGUI(ctk.CTk):
                 "height_cm": float(self.height_entry.get()),
                 "activity_level": self.activity_var.get(),
                 "goal": self.goal_var.get(),
-                "diseases": diseases
+                "diseases": diseases,
+                "num_meals": num_meals,
+                "calorie_target": calorie_target,  # None unless the user set one
             }
 
             # Call the function from your inference_engine.py
@@ -104,7 +165,9 @@ class DietExpertGUI(ctk.CTk):
         text += "═" * 45 + "\n"
         text += f"Status  : {r['bmi_category'].upper()} (BMI: {r['bmi']})\n"
         text += f"Daily Burn (TDEE): {r['tdee']} kcal\n"
-        text += f"Target Intake    : {r['target_calories']} kcal/day\n"
+        target_note = " (manually set)" if r.get("calorie_target_overridden") else " (auto-calculated)"
+        text += f"Target Intake    : {r['target_calories']} kcal/day{target_note}\n"
+        text += f"Meals per day    : {r.get('num_meals', len(r['meal_plan']))}\n"
         
         if r['foods_to_avoid']:
             text += f"\n🚫 AVOID: {', '.join(r['foods_to_avoid'])}\n"
